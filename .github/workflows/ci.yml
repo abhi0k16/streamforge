@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+    branches: [master, main, develop]
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install deps (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+          sudo apt-get update
+          sudo apt-get install -y g++-15 libspdlog-dev wget
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-15 100
+          wget -qO- https://github.com/Kitware/CMake/releases/download/v4.2.3/cmake-4.2.3-linux-x86_64.tar.gz | sudo tar xz -C /usr/local --strip-components=1
+          echo "CMAKE_EXTRA_FLAGS=" >> $GITHUB_ENV
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake spdlog gcc
+          echo "CMAKE_EXTRA_FLAGS=-DCMAKE_C_COMPILER=gcc-15 -DCMAKE_CXX_COMPILER=g++-15" >> $GITHUB_ENV
+
+      - name: Build and test
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release $CMAKE_EXTRA_FLAGS
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+  lint:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: sudo apt-get update && sudo apt-get install -y clang-format-18
+      - run: find src -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run --Werror
+
+  sanitizers:
+    name: ASan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install deps
+        run: |
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+          sudo apt-get update
+          sudo apt-get install -y g++-15 libspdlog-dev wget
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-15 100
+          wget -qO- https://github.com/Kitware/CMake/releases/download/v4.2.3/cmake-4.2.3-linux-x86_64.tar.gz | sudo tar xz -C /usr/local --strip-components=1
+      - name: Build and test
+        run: |
+          cmake -B build -S . -DENABLE_ASAN=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install deps
+        run: |
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+          sudo apt-get update
+          sudo apt-get install -y g++-15 libspdlog-dev wget lcov
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-15 100
+          wget -qO- https://github.com/Kitware/CMake/releases/download/v4.2.3/cmake-4.2.3-linux-x86_64.tar.gz | sudo tar xz -C /usr/local --strip-components=1
+      - name: Build and test
+        run: |
+          cmake -B build -S . -DENABLE_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+      - name: Generate coverage
+        run: |
+          lcov --capture --directory build --output-file build/coverage.info --rc lcov_branch_coverage=1 --ignore-errors mismatch --gcov-tool=/usr/bin/gcov-15
+          lcov --remove build/coverage.info '/usr/*' '*/_deps/*' --output-file build/coverage.info
